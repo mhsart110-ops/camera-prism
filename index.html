@@ -264,7 +264,8 @@ async function startDetector() {
       corePath: base,
       langPath: base,
       gzip: true,
-      workerBlobURL: false
+      cacheMethod: 'none',
+      logger: m => { if (m && m.status) statusEl.textContent = 'آماده‌سازی: ' + m.status; }
     });
     statusEl.textContent = 'آیه را روبه‌روی دوربین بگیرید';
     setInterval(scan, 1500);
