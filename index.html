@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Camera Prism</title>
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prism">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  html, body { margin:0; height:100%; background:#000; overflow:hidden; font-family:sans-serif; }
+  canvas { display:block; width:100vw; height:100vh; touch-action:none; }
+  #start {
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#000; color:#fff; z-index:10; cursor:pointer; font-size:1.2rem;
+  }
+  #hint {
+    position:fixed; bottom:12px; width:100%; text-align:center; color:#fff8;
+    font-size:.85rem; pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<div id="start">برای شروع دوربین را فعال کنید</div>
+<div id="hint">با کشیدن انگشت، منشور را بچرخانید</div>
+<video id="cam" autoplay playsinline muted style="display:none"></video>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(console.error));
+}
+</script>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const video = document.getElementById('cam');
+const startEl = document.getElementById('start');
+
+// وجوه مکعب: هر وجه یک حالت اعوجاج دارد
+// 0: عادی/آینه‌ای  1: وارونه  2: کوژ (Convex)  3: مقعر (Concave)  4: موج‌دار  5: چرخشی
+const FACE_MODES = [2, 3, 0, 1, 4, 5];
+
+const vert = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const frag = `
+  precision highp float;
+  uniform sampler2D tex;
+  uniform int mode;
+  uniform float time;
+  varying vec2 vUv;
+
+  void main() {
+    vec2 p = vUv * 2.0 - 1.0;           // [-1,1]
+    float r2 = dot(p, p);
+    vec2 q = p;
+
+    if (mode == 0) {                    // آینه‌ای
+      q.x = -q.x;
+    } else if (mode == 1) {             // وارونه
+      q = -p;
+    } else if (mode == 2) {             // کوژ
+      q = p * (1.0 - 0.45 * r2);
+      q.x = -q.x;
+    } else if (mode == 3) {             // مقعر
+      q = p * (1.0 + 0.6 * r2);
+      q.x = -q.x;
+    } else if (mode == 4) {             // موج‌دار
+      q.y += 0.12 * sin(p.x * 6.0 + time * 1.5);
+      q.x = -q.x;
+    } else {                            // چرخشی + کوژ ملایم
+      float a = 0.6 * r2;
+      float c = cos(a), s = sin(a);
+      q = mat2(c, -s, s, c) * p * (1.0 - 0.25 * r2);
+    }
+
+    vec2 uv = q * 0.5 + 0.5;
+    // نسبت تصویر: کراپ مرکزی تا تصویر پر شود
+    uv = clamp(uv, 0.0, 1.0);
+    vec3 col = texture2D(tex, uv).rgb;
+
+    // لبه‌ها کمی تیره‌تر برای حس شیشه/منشور
+    float edge = smoothstep(1.0, 0.85, max(abs(p.x), abs(p.y)));
+    col *= mix(0.55, 1.0, edge);
+    col += vec3(0.03, 0.05, 0.08) * (1.0 - r2);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.z = 4.2;
+
+let videoTex = null;
+const clock = new THREE.Clock();
+const materials = [];
+
+function buildCube() {
+  const geo = new THREE.BoxGeometry(2, 2, 2);
+  // هر وجه یک گروپ جدا دارد؛ متریال جداگانه برای هر وجه
+  const mats = FACE_MODES.map(mode => {
+    const m = new THREE.ShaderMaterial({
+      uniforms: {
+        tex: { value: videoTex },
+        mode: { value: mode },
+        time: { value: 0 },
+      },
+      vertexShader: vert,
+      fragmentShader: frag,
+    });
+    materials.push(m);
+    return m;
+  });
+  const mesh = new THREE.Mesh(geo, mats);
+  scene.add(mesh);
+  return mesh;
+}
+
+const cube = buildCube();
+cube.rotation.set(0.5, 0.6, 0);
+
+// چرخش با انگشت / ماوس
+let dragging = false, lx = 0, ly = 0, vx = 0.002, vy = 0.003;
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; });
+window.addEventListener('pointerup', () => dragging = false);
+window.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lx, dy = e.clientY - ly;
+  lx = e.clientX; ly = e.clientY;
+  vy = dx * 0.005; vx = dy * 0.005;
+  cube.rotation.y += vy; cube.rotation.x += vx;
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  if (!dragging) {
+    cube.rotation.y += vy * 0.98 + 0.002;
+    cube.rotation.x += vx * 0.98;
+    vx *= 0.98; vy *= 0.98;
+  }
+  materials.forEach(m => m.uniforms.time.value = t);
+  renderer.render(scene, camera);
+}
+
+startEl.addEventListener('click', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }, audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    videoTex = new THREE.VideoTexture(video);
+    videoTex.colorSpace = THREE.SRGBColorSpace;
+    materials.forEach(m => m.uniforms.tex.value = videoTex);
+    startEl.remove();
+    animate();
+  } catch (err) {
+    startEl.textContent = 'دسترسی به دوربین ممکن نیست: ' + err.message;
+  }
+});
+</script>
+</body>
+</html>
