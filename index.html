@@ -35,6 +35,7 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(console.error));
 }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
 </script>
@@ -61,6 +62,7 @@ const frag = `
   uniform sampler2D tex;
   uniform int mode;
   uniform float time;
+  uniform float glow;
   varying vec2 vUv;
 
   void main() {
@@ -96,6 +98,10 @@ const frag = `
     float edge = smoothstep(1.0, 0.85, max(abs(p.x), abs(p.y)));
     col *= mix(0.55, 1.0, edge);
     col += vec3(0.03, 0.05, 0.08) * (1.0 - r2);
+    // درخشش وقتی آیه شناسایی شود
+    vec3 light = vec3(0.45, 0.85, 1.0) * (0.85 + 0.15 * sin(time * 4.0));
+    col = mix(col, col * 1.6 + light * 0.35, glow);
+    col += light * glow * 0.25 * (1.0 - 0.5 * r2);
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -123,6 +129,7 @@ function buildCube() {
         tex: { value: videoTex },
         mode: { value: mode },
         time: { value: 0 },
+        glow: { value: 0 },
       },
       vertexShader: vert,
       fragmentShader: frag,
@@ -165,8 +172,74 @@ function animate() {
     cube.rotation.x += vx * 0.98;
     vx *= 0.98; vy *= 0.98;
   }
-  materials.forEach(m => m.uniforms.time.value = t);
+  glowCur += (glowTarget - glowCur) * 0.04;
+  materials.forEach(m => { m.uniforms.time.value = t; m.uniforms.glow.value = glowCur; });
   renderer.render(scene, camera);
+}
+
+// ---- تشخیص آیه (OCR فارسی/عربی در مرورگر) ----
+const KEYS = ['الفيل', 'اصحاب', 'ربك', 'كيف', 'فعل', 'تر'];
+let worker = null, scanning = false, glowTarget = 0, glowCur = 0, glowTimer = null;
+const statusEl = document.createElement('div');
+statusEl.style.cssText = 'position:fixed;top:12px;width:100%;text-align:center;color:#fff;font-size:.95rem;pointer-events:none;text-shadow:0 0 6px #000;z-index:5';
+document.body.appendChild(statusEl);
+const ocrCanvas = document.createElement('canvas');
+const octx = ocrCanvas.getContext('2d', { willReadFrequently: true });
+
+// یکسان‌سازی متن: حذف اعراب، یکسان کردن شکل حروف عربی و فارسی
+function normalize(s) {
+  return s
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[إأآٱ]/g, 'ا')
+    .replace(/[ىی]/g, 'ي')
+    .replace(/ک/g, 'ك')
+    .replace(/ة/g, 'ه')
+    .replace(/[ؤ]/g, 'و')
+    .replace(/[ئ]/g, 'ي');
+}
+
+function isMatch(text) {
+  const t = normalize(text);
+  const hits = KEYS.filter(k => t.includes(k)).length;
+  return hits >= 4 && (t.includes('الفيل') || t.includes('اصحاب'));
+}
+
+function triggerGlow() {
+  glowTarget = 1;
+  statusEl.textContent = 'منشور درخشید ✨ آیه شناسایی شد';
+  clearTimeout(glowTimer);
+  glowTimer = setTimeout(() => {
+    glowTarget = 0;
+    statusEl.textContent = 'آیه را روبه‌روی دوربین بگیرید';
+  }, 6000);
+}
+
+async function startDetector() {
+  statusEl.textContent = 'در حال آماده‌سازی تشخیص متن...';
+  try {
+    worker = await Tesseract.createWorker('ara');
+    statusEl.textContent = 'آیه را روبه‌روی دوربین بگیرید';
+    setInterval(scan, 1500);
+  } catch (e) {
+    statusEl.textContent = 'تشخیص متن در دسترس نیست: ' + e.message;
+  }
+}
+
+async function scan() {
+  if (scanning || !worker || video.readyState < 2) return;
+  scanning = true;
+  try {
+    const w = 800;
+    const h = Math.round(video.videoHeight * w / video.videoWidth);
+    ocrCanvas.width = w;
+    ocrCanvas.height = h;
+    octx.drawImage(video, 0, 0, w, h);
+    const { data } = await worker.recognize(ocrCanvas);
+    if (isMatch(data.text)) triggerGlow();
+  } catch (e) {
+    // خطای یک فریم را نادیده می‌گیریم
+  }
+  scanning = false;
 }
 
 startEl.addEventListener('click', async () => {
@@ -181,6 +254,7 @@ startEl.addEventListener('click', async () => {
     materials.forEach(m => m.uniforms.tex.value = videoTex);
     startEl.remove();
     animate();
+    startDetector();
   } catch (err) {
     startEl.textContent = 'دسترسی به دوربین ممکن نیست: ' + err.message;
   }
