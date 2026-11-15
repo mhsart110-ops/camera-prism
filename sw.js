@@ -1,4 +1,4 @@
-const CACHE = 'prism-v6';
+const CACHE = 'prism-v7';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -17,6 +17,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  // فایل‌های سنگین تشخیص متن را دست نزن (در Firefox باعث قطع شدن دانلود می‌شد)
+  if (/\/(worker\.min\.js|tesseract[^/]*|ara\.traineddata\.gz)$/.test(new URL(req.url).pathname)) return;
   const isPage = req.mode === 'navigate';
   e.respondWith(
     (isPage
