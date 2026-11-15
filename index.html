@@ -35,7 +35,7 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(console.error));
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="ocr/tesseract.min.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
 </script>
@@ -251,11 +251,17 @@ if (SR) {
 async function startDetector() {
   statusEl.textContent = 'در حال آماده‌سازی تشخیص متن...';
   try {
-    worker = await Tesseract.createWorker('ara');
+    const base = new URL('ocr/', location.href).href;
+    worker = await Tesseract.createWorker('ara', 1, {
+      workerPath: base + 'worker.min.js',
+      corePath: base,
+      langPath: base,
+      gzip: true
+    });
     statusEl.textContent = 'آیه را روبه‌روی دوربین بگیرید';
     setInterval(scan, 1500);
   } catch (e) {
-    statusEl.textContent = 'تشخیص متن در دسترس نیست: ' + e.message;
+    statusEl.textContent = 'تشخیص متن در دسترس نیست: ' + (e && (e.message || e) || 'خطای نامشخص');
   }
 }
 
