@@ -45,88 +45,144 @@ import * as THREE from 'three';
 const video = document.getElementById('cam');
 const startEl = document.getElementById('start');
 
-// وجوه مکعب: هر وجه یک حالت اعوجاج دارد
-// 0: عادی/آینه‌ای  1: وارونه  2: کوژ (Convex)  3: مقعر (Concave)  4: موج‌دار  5: چرخشی
+// وجوه مکعب: هر وجه یک نوع اعوجاج شیشه‌ای دارد
+// 0: شیشه‌ی صاف  1: وارونه  2: کوژ (Convex)  3: مقعر (Concave)  4: موج‌دار  5: چرخشی
 const FACE_MODES = [2, 3, 0, 1, 4, 5];
 
-const vert = `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+// کادربندی مثل object-fit: cover، بدون آینه (دوربین همان‌طور که هست)
+const cover = `
+  uniform sampler2D tex;
+  uniform vec2 res;
+  uniform float vAspect;
+  vec2 coverUV(vec2 s) {
+    float r = res.x / res.y;
+    vec2 u = s;
+    if (r > vAspect) u.y = (s.y - 0.5) * (vAspect / r) + 0.5;
+    else             u.x = (s.x - 0.5) * (r / vAspect) + 0.5;
+    return u;
   }
 `;
 
-const frag = `
+const vert = `
+  varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vV;
+  void main() {
+    vUv = uv;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vN = normalize(normalMatrix * normal);
+    vV = -mv.xyz;
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+// هر وجه: ویدیوی پس‌زمینه را در مختصات صفحه نمونه‌برداری می‌کند و آن را شکست نور می‌دهد
+const frag = cover + `
   precision highp float;
-  uniform sampler2D tex;
   uniform int mode;
   uniform float time;
   uniform float glow;
   varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vV;
 
   void main() {
-    vec2 p = vUv * 2.0 - 1.0;           // [-1,1]
+    vec2 p = vUv * 2.0 - 1.0;           // [-1,1] روی وجه
     float r2 = dot(p, p);
-    vec2 q = p;
+    vec2 d = vec2(0.0);                 // جابه‌جایی نوری بر حسب p
 
-    if (mode == 0) {                    // آینه‌ای
-      q.x = -q.x;
-    } else if (mode == 1) {             // وارونه
-      q = -p;
+    if (mode == 1) {                    // وارونه
+      d = -p * 0.10;
     } else if (mode == 2) {             // کوژ
-      q = p * (1.0 - 0.45 * r2);
-      q.x = -q.x;
+      d = -p * r2 * 0.22;
     } else if (mode == 3) {             // مقعر
-      q = p * (1.0 + 0.6 * r2);
-      q.x = -q.x;
+      d = p * r2 * 0.22;
     } else if (mode == 4) {             // موج‌دار
-      q.y += 0.12 * sin(p.x * 6.0 + time * 1.5);
-      q.x = -q.x;
-    } else {                            // چرخشی + کوژ ملایم
-      float a = 0.6 * r2;
-      float c = cos(a), s = sin(a);
-      q = mat2(c, -s, s, c) * p * (1.0 - 0.25 * r2);
+      d = vec2(0.02 * sin(p.y * 5.0 + time * 1.5), 0.07 * sin(p.x * 6.0 + time * 1.5));
+    } else if (mode == 5) {             // چرخشی
+      float a = 0.5 * r2;
+      mat2 R = mat2(cos(a), -sin(a), sin(a), cos(a));
+      d = (R * p - p) * 0.25;
     }
 
-    vec2 uv = q * 0.5 + 0.5;
-    // نسبت تصویر: کراپ مرکزی تا تصویر پر شود
-    uv = clamp(uv, 0.0, 1.0);
-    vec3 col = texture2D(tex, uv).rgb;
+    vec3 n = normalize(vN);
+    vec3 v = normalize(vV);
+    float ndv = clamp(dot(n, v), 0.0, 1.0);
 
-    // لبه‌ها کمی تیره‌تر برای حس شیشه/منشور
-    float edge = smoothstep(1.0, 0.85, max(abs(p.x), abs(p.y)));
-    col *= mix(0.55, 1.0, edge);
-    col += vec3(0.03, 0.05, 0.08) * (1.0 - r2);
+    // مختصات صفحه + شکست نور وابسته به زاویه‌ی وجه
+    vec2 s = gl_FragCoord.xy / res;
+    vec2 base = s + d * 0.5 + (-n.xy) * 0.05;
+    // پاشش رنگی (Chromatic aberration) در امتداد شعاعی
+    vec2 ca = p * 0.008;
+    float R = texture2D(tex, coverUV(base + ca)).r;
+    float G = texture2D(tex, coverUV(base)).g;
+    float B = texture2D(tex, coverUV(base - ca)).b;
+    vec3 col = vec3(R, G, B);
+
+    // رنگ شیشه کمی آبی-فیروزه‌ای
+    col *= vec3(0.93, 0.98, 1.04);
+    // لبه‌ی براق (Fresnel) و پخ لبه
+    float fres = pow(1.0 - ndv, 3.0);
+    col += vec3(0.55, 0.85, 1.0) * fres * 0.6;
+    float edge = max(abs(p.x), abs(p.y));
+    col = mix(col, vec3(1.0), smoothstep(0.86, 0.98, edge) * 0.35);
+    col *= mix(0.8, 1.0, smoothstep(1.0, 0.8, edge));
+
     // درخشش وقتی آیه شناسایی شود
     vec3 light = vec3(0.45, 0.85, 1.0) * (0.85 + 0.15 * sin(time * 4.0));
-    col = mix(col, col * 1.6 + light * 0.35, glow);
-    col += light * glow * 0.25 * (1.0 - 0.5 * r2);
+    col = mix(col, col * 1.5 + light * 0.3, glow);
+    col += light * glow * 0.2 * (1.0 - 0.5 * r2);
     gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+// پس‌زمینه: دوربین تمام‌صفحه، بدون آینه
+const bgVert = `
+  void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+const bgFrag = cover + `
+  precision highp float;
+  void main() {
+    vec2 s = gl_FragCoord.xy / res;
+    gl_FragColor = vec4(texture2D(tex, coverUV(s)).rgb, 1.0);
   }
 `;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.autoClear = false;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000000);
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+const bgScene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.z = 4.2;
 
-let videoTex = null;
+const resV = new THREE.Vector2(1, 1);
 const clock = new THREE.Clock();
 const materials = [];
+let videoTex = null;
+
+const bgMat = new THREE.ShaderMaterial({
+  uniforms: { tex: { value: null }, res: { value: resV }, vAspect: { value: 1 } },
+  vertexShader: bgVert,
+  fragmentShader: bgFrag,
+  depthTest: false,
+  depthWrite: false,
+});
+const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat);
+bgMesh.frustumCulled = false;
+bgScene.add(bgMesh);
 
 function buildCube() {
   const geo = new THREE.BoxGeometry(2, 2, 2);
-  // هر وجه یک گروپ جدا دارد؛ متریال جداگانه برای هر وجه
+  // هر وجه یک گروپ جدا و متریال جداگانه دارد
   const mats = FACE_MODES.map(mode => {
     const m = new THREE.ShaderMaterial({
       uniforms: {
-        tex: { value: videoTex },
+        tex: { value: null },
+        res: { value: resV },
+        vAspect: { value: 1 },
         mode: { value: mode },
         time: { value: 0 },
         glow: { value: 0 },
@@ -158,11 +214,14 @@ window.addEventListener('pointermove', e => {
   cube.rotation.y += vy; cube.rotation.x += vx;
 });
 
-window.addEventListener('resize', () => {
+function updateSize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.getDrawingBufferSize(resV);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+}
+window.addEventListener('resize', updateSize);
+updateSize();
 
 function animate() {
   requestAnimationFrame(animate);
@@ -173,8 +232,15 @@ function animate() {
     vx *= 0.98; vy *= 0.98;
   }
   glowCur += (glowTarget - glowCur) * 0.04;
+  const va = video.videoWidth ? video.videoWidth / video.videoHeight : 1;
   materials.forEach(m => { m.uniforms.time.value = t; m.uniforms.glow.value = glowCur; });
-  renderer.render(scene, camera);
+  [bgMat, ...materials].forEach(m => {
+    m.uniforms.tex.value = videoTex;
+    m.uniforms.vAspect.value = va;
+  });
+  renderer.clear();
+  renderer.render(bgScene, camera);   // اول پس‌زمینه
+  renderer.render(scene, camera);     // بعد منشور روی آن
 }
 
 // ---- تشخیص آیه (OCR فارسی/عربی در مرورگر) ----
@@ -203,25 +269,37 @@ function normalize(s) {
 
 function lev(a,b){const m=a.length,n=b.length;if(!m)return n;if(!n)return m;let p=Array.from({length:n+1},(_,i)=>i);for(let i=1;i<=m;i++){let c=[i];for(let j=1;j<=n;j++)c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1));p=c;}return p[n];}
 const TARGET = normalize('الم تر كيف فعل ربك باصحاب الفيل').replace(/\s+/g,'');
-const WORDS = ['الم','تر','كيف','فعل','ربك','باصحاب','الفيل'];
-function isMatch(text) {
+const STRONG = ['كيف','فعل','ربك','باصحاب','الفيل'];
+const WEAK = ['الم','تر'];
+let history = [];
+function wordHits(text) {
   const t = normalize(text).replace(/[^\u0600-\u06FF\s]/g,' ');
   const flat = t.replace(/\s+/g,'');
-  // شمارش کلمات با مطابقت تقریبی
   const toks = t.split(/\s+/).filter(Boolean);
-  let hits = 0;
-  for (const w of WORDS) {
-    const ok = flat.includes(w) || toks.some(k => w.length > 3 && Math.abs(k.length-w.length)<=2 && lev(k,w) <= 1);
-    if (ok) hits++;
-  }
-  if (hits >= 3) return true;
-  // مطابقت کلی رشته
+  const hit = w => {
+    if (w.length >= 4 && flat.includes(w)) return true;
+    return toks.some(k => k === w || (w.length >= 3 && Math.abs(k.length-w.length) <= 1 && lev(k,w) <= 1) || (w.length >= 4 && k.length > w.length && lev(k.slice(0,w.length+1),w) <= 1));
+  };
+  const s = new Set();
+  STRONG.forEach(w => { if (hit(w)) s.add(w); });
+  WEAK.forEach(w => { if (toks.includes(w)) s.add(w); });
+  let sim = 0;
   const win = TARGET.length;
   for (let i = 0; i + win*0.7 <= flat.length; i += 2) {
-    const seg = flat.slice(i, i + win);
-    if (1 - lev(seg, TARGET)/win >= 0.6) return true;
+    sim = Math.max(sim, 1 - lev(flat.slice(i, i + win), TARGET)/win);
   }
-  return false;
+  return { s, sim };
+}
+function isMatch(text) {
+  const { s, sim } = wordHits(text);
+  const strongN = STRONG.filter(w => s.has(w)).length;
+  // انباشتن نتیجه چند اسکن پشت‌سرهم (هر اسکن بخشی از آیه را درست می‌خواند)
+  history.push(s); if (history.length > 5) history.shift();
+  if (strongN >= 3 || sim >= 0.6) return true;
+  const u = new Set(); history.forEach(h => h.forEach(w => u.add(w)));
+  const uStrong = STRONG.filter(w => u.has(w)).length;
+  const uWeak = WEAK.filter(w => u.has(w)).length;
+  return uStrong >= 4 || (uStrong >= 3 && uWeak >= 1);
 }
 
 function triggerGlow() {
@@ -274,16 +352,45 @@ async function startDetector() {
   }
 }
 
+// دودویی‌سازی تطبیقی (روشنایی ناهمگون) با تصویر انتگرالی؛ برای خط عثمانی بسیار مؤثر است
+function binarize(cv, c) {
+  const w = cv.width, h = cv.height;
+  const img = octx.getImageData(0, 0, w, h), d = img.data;
+  const g = new Uint8ClampedArray(w*h);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = d[i];
+  const W1 = w + 1, I = new Float64Array(W1 * (h + 1));
+  for (let y = 1; y <= h; y++) {
+    let row = 0;
+    for (let x = 1; x <= w; x++) { row += g[(y-1)*w + x-1]; I[y*W1+x] = I[(y-1)*W1+x] + row; }
+  }
+  const r = Math.max(8, Math.round(w / 40));
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y-r), y1 = Math.min(h, y+r+1);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x-r), x1 = Math.min(w, x+r+1);
+      const sum = I[y1*W1+x1] - I[y0*W1+x1] - I[y1*W1+x0] + I[y0*W1+x0];
+      const mean = sum / ((x1-x0)*(y1-y0));
+      const v = g[y*w+x] < mean - c ? 0 : 255;
+      const k = (y*w+x)*4; d[k] = d[k+1] = d[k+2] = v; d[k+3] = 255;
+    }
+  }
+  octx.putImageData(img, 0, 0);
+}
+
+const SCALES = [1800, 1300, 1000];
+let scanNo = 0;
 async function scan() {
   if (scanning || !worker || video.readyState < 2) return;
   scanning = true;
   try {
-    const w = 1400;
+    const w = SCALES[scanNo++ % SCALES.length];
     const h = Math.round(video.videoHeight * w / video.videoWidth);
     ocrCanvas.width = w;
     ocrCanvas.height = h;
-    octx.filter = 'grayscale(1) contrast(1.8)';
+    octx.filter = 'grayscale(1) blur(' + (w / 1400).toFixed(2) + 'px)';
     octx.drawImage(video, 0, 0, w, h);
+    octx.filter = 'none';
+    binarize(ocrCanvas, 10);
     const { data } = await worker.recognize(ocrCanvas);
     dbg.textContent = (data.text||'').trim().slice(0,160);
     if (isMatch(data.text)) triggerGlow();
@@ -301,8 +408,6 @@ startEl.addEventListener('click', async () => {
     video.srcObject = stream;
     await video.play();
     videoTex = new THREE.VideoTexture(video);
-    videoTex.colorSpace = THREE.SRGBColorSpace;
-    materials.forEach(m => m.uniforms.tex.value = videoTex);
     startEl.remove();
     animate();
     startDetector();
