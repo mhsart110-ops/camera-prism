@@ -111,7 +111,7 @@ const frag = cover + `
 
     // مختصات صفحه + شکست نور وابسته به زاویه‌ی وجه
     vec2 s = gl_FragCoord.xy / res;
-    vec2 base = s + d * 0.5 + (-n.xy) * 0.05;
+    vec2 base = s + d * 0.5 + (-n.xy) * 0.12;
     // پاشش رنگی (Chromatic aberration) در امتداد شعاعی
     vec2 ca = p * 0.008;
     float R = texture2D(tex, coverUV(base + ca)).r;
@@ -129,9 +129,15 @@ const frag = cover + `
     col *= mix(0.8, 1.0, smoothstep(1.0, 0.8, edge));
 
     // درخشش وقتی آیه شناسایی شود
-    vec3 light = vec3(0.45, 0.85, 1.0) * (0.85 + 0.15 * sin(time * 4.0));
-    col = mix(col, col * 1.5 + light * 0.3, glow);
-    col += light * glow * 0.2 * (1.0 - 0.5 * r2);
+    // برق سطح شیشه
+    float spec = pow(max(dot(reflect(-v, n), normalize(vec3(-0.4, 0.6, 0.7))), 0.0), 40.0);
+    col += vec3(1.0) * spec * 0.35;
+
+    // درخشش وقتی آیه شناسایی شود
+    float pulse = 0.85 + 0.15 * sin(time * 4.0);
+    vec3 light = vec3(0.35, 0.9, 1.0) * pulse;
+    col = mix(col, col * 1.25 + light * 0.25, glow);
+    col += light * glow * (0.35 * fres + 0.5 * smoothstep(0.7, 1.0, edge));
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -200,6 +206,7 @@ function buildCube() {
 
 const cube = buildCube();
 cube.rotation.set(0.5, 0.6, 0);
+cube.scale.setScalar(0.42);   // منشور کوچک وسط صفحه
 
 // چرخش با انگشت / ماوس
 let dragging = false, lx = 0, ly = 0, vx = 0.002, vy = 0.003;
