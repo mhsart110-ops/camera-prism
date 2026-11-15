@@ -35,7 +35,7 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(console.error));
 }
 </script>
-<script src="ocr/tesseract.min.js"></script>
+<script src="tesseract.min.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
 </script>
@@ -251,12 +251,20 @@ if (SR) {
 async function startDetector() {
   statusEl.textContent = 'در حال آماده‌سازی تشخیص متن...';
   try {
-    const base = new URL('ocr/', location.href).href;
+    const base = new URL('./', location.href).href;
+    const need = ['worker.min.js', 'tesseract-core-simd-lstm.wasm.js', 'tesseract-core-lstm.wasm.js', 'ara.traineddata.gz'];
+    const missing = [];
+    for (const f of need) {
+      try { const r = await fetch(base + f, { cache: 'no-store' }); if (!r.ok) missing.push(f + ' (' + r.status + ')'); }
+      catch (_) { missing.push(f); }
+    }
+    if (missing.length) throw new Error('فایل ناموجود روی سایت: ' + missing.join(' ، '));
     worker = await Tesseract.createWorker('ara', 1, {
       workerPath: base + 'worker.min.js',
       corePath: base,
       langPath: base,
-      gzip: true
+      gzip: true,
+      workerBlobURL: false
     });
     statusEl.textContent = 'آیه را روبه‌روی دوربین بگیرید';
     setInterval(scan, 1500);
