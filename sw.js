@@ -1,4 +1,4 @@
-const CACHE = 'prism-v10';
+const CACHE = 'prism-v11';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

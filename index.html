@@ -23,12 +23,40 @@
     position:fixed; bottom:12px; width:100%; text-align:center; color:#fff8;
     font-size:.85rem; pointer-events:none;
   }
+  :root { --t: 30vh; --h: 18vh; }
+  .ui { position:fixed; opacity:0; transition:opacity .6s; pointer-events:none; }
+  .ui.on { opacity:1; }
+  .veil { background:rgba(0,0,0,.4); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); z-index:3; }
+  #veilT { left:0; right:0; top:0; height:var(--t); }
+  #veilB { left:0; right:0; top:calc(var(--t) + var(--h)); height:calc(68vh - var(--t) - var(--h)); }
+  #veilL, #veilR { top:var(--t); height:var(--h); width:4vw; }
+  #veilL { left:0; } #veilR { right:0; }
+  #strip { left:4vw; right:4vw; top:var(--t); height:var(--h); border:2px solid #fc5; border-radius:10px; box-shadow:0 0 18px #fc58; overflow:hidden; z-index:4; }
+  #wbox { position:absolute; top:14%; bottom:14%; background:rgba(255,200,80,.25); border:2px solid #fd7; border-radius:6px; transition:left .4s, width .4s; }
+  #card { left:50%; transform:translateX(-50%); top:48px; width:88%; max-width:420px; box-sizing:border-box; padding:12px 14px; background:rgba(10,10,25,.82); color:#fff; border-radius:16px; text-align:center; direction:rtl; z-index:6; }
+  #card.on, #card button { pointer-events:auto; }
+  #cardT { font-size:1.05rem; font-weight:bold; color:#fc5; }
+  #cardW { font-size:1.4rem; margin:6px 0; color:#fff; }
+  #cardH { font-size:.85rem; color:#ccc; }
+  .btns { margin-top:10px; display:flex; gap:10px; justify-content:center; }
+  .btns button { padding:8px 16px; border-radius:18px; border:0; font-size:.95rem; background:#fc5; color:#000; }
 </style>
 </head>
 <body>
 <div id="start">برای شروع دوربین را فعال کنید</div>
 <div id="hint">با کشیدن انگشت، منشور را بچرخانید</div>
 <video id="cam" autoplay playsinline muted style="display:none"></video>
+<div class="ui veil" id="veilT"></div>
+<div class="ui veil" id="veilB"></div>
+<div class="ui veil" id="veilL"></div>
+<div class="ui veil" id="veilR"></div>
+<div class="ui" id="strip"><div id="wbox"></div></div>
+<div class="ui" id="card">
+  <div id="cardT"></div>
+  <div id="cardW"></div>
+  <div id="cardH">هر آیه را با صدای بلند بخوانید؛ فقط سطر طلایی واضح است</div>
+  <div class="btns"><button id="nextBtn">آیه‌ی بعد</button><button id="endBtn">پایان</button></div>
+</div>
 
 <script>
 if ('serviceWorker' in navigator) {
@@ -82,6 +110,7 @@ const frag = cover + `
   uniform int mode;
   uniform float time;
   uniform float glow;
+  uniform float gold;
   varying vec2 vUv;
   varying vec3 vN;
   varying vec3 vV;
@@ -128,14 +157,13 @@ const frag = cover + `
     col = mix(col, vec3(1.0), smoothstep(0.86, 0.98, edge) * 0.35);
     col *= mix(0.8, 1.0, smoothstep(1.0, 0.8, edge));
 
-    // درخشش وقتی آیه شناسایی شود
     // برق سطح شیشه
     float spec = pow(max(dot(reflect(-v, n), normalize(vec3(-0.4, 0.6, 0.7))), 0.0), 40.0);
     col += vec3(1.0) * spec * 0.35;
 
     // درخشش وقتی آیه شناسایی شود
     float pulse = 0.85 + 0.15 * sin(time * 4.0);
-    vec3 light = vec3(0.35, 0.9, 1.0) * pulse;
+    vec3 light = mix(vec3(0.35, 0.9, 1.0), vec3(1.0, 0.78, 0.25), gold) * pulse;
     col = mix(col, col * 1.25 + light * 0.25, glow);
     col += light * glow * (0.35 * fres + 0.5 * smoothstep(0.7, 1.0, edge));
     gl_FragColor = vec4(col, 1.0);
@@ -192,6 +220,7 @@ function buildCube() {
         mode: { value: mode },
         time: { value: 0 },
         glow: { value: 0 },
+        gold: { value: 0 },
       },
       vertexShader: vert,
       fragmentShader: frag,
@@ -211,11 +240,14 @@ cube.scale.setScalar(0.42);   // منشور کوچک وسط صفحه
 // چرخش با انگشت / ماوس
 let dragging = false, lx = 0, ly = 0, vx = 0.002, vy = 0.003;
 const el = renderer.domElement;
-el.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; });
+let moved = 0;
+el.addEventListener('pointerdown', e => { dragging = true; moved = 0; lx = e.clientX; ly = e.clientY; });
+el.addEventListener('pointerup', () => { if (moved < 10) onTap(); });
 window.addEventListener('pointerup', () => dragging = false);
 window.addEventListener('pointermove', e => {
   if (!dragging) return;
   const dx = e.clientX - lx, dy = e.clientY - ly;
+  moved += Math.abs(dx) + Math.abs(dy);
   lx = e.clientX; ly = e.clientY;
   vy = dx * 0.005; vx = dy * 0.005;
   cube.rotation.y += vy; cube.rotation.x += vx;
@@ -239,8 +271,10 @@ function animate() {
     vx *= 0.98; vy *= 0.98;
   }
   glowCur += (glowTarget - glowCur) * 0.04;
+  goldCur += (goldTarget - goldCur) * 0.04;
+  cube.position.y += (cubeTargetY - cube.position.y) * 0.06;
   const va = video.videoWidth ? video.videoWidth / video.videoHeight : 1;
-  materials.forEach(m => { m.uniforms.time.value = t; m.uniforms.glow.value = glowCur; });
+  materials.forEach(m => { m.uniforms.time.value = t; m.uniforms.glow.value = glowCur; m.uniforms.gold.value = goldCur; });
   [bgMat, ...materials].forEach(m => {
     m.uniforms.tex.value = videoTex;
     m.uniforms.vAspect.value = va;
@@ -309,15 +343,71 @@ function isMatch(text) {
   return uStrong >= 4 || (uStrong >= 3 && uWeak >= 1);
 }
 
-function triggerGlow() {
-  glowTarget = 1;
-  statusEl.textContent = 'منشور درخشید ✨ آیه شناسایی شد';
-  clearTimeout(glowTimer);
-  glowTimer = setTimeout(() => {
-    glowTarget = 0;
-    statusEl.textContent = 'آیه را روبه‌روی دوربین بگیرید';
-  }, 6000);
+// ---- مراحل: watch → found → reading → done ----
+// هر آیه‌ی سوره‌ی فیل با کلمات نرمال‌شده‌اش
+const SURAH = [
+  ['الم','تر','كيف','فعل','ربك','باصحاب','الفيل'],
+  ['الم','يجعل','كيدهم','في','تضليل'],
+  ['وارسل','عليهم','طيرا','ابابيل'],
+  ['ترميهم','بحجاره','من','سجيل'],
+  ['فجعلهم','كعصف','ماكول'],
+];
+let state = 'watch', rv = 0, rHits = new Set(), rMax = 0;
+let cubeTargetY = 0, goldTarget = 0, goldCur = 0;
+const UI = ['veilT','veilB','veilL','veilR','strip','card'].map(id => document.getElementById(id));
+
+function tokHit(w, toks, flat) {
+  if (w.length >= 4 && flat.includes(w)) return true;
+  return toks.some(k => k === w || (w.length >= 3 && Math.abs(k.length - w.length) <= 1 && lev(k, w) <= 1));
 }
+
+function setState(s) {
+  state = s;
+  const reading = s === 'reading';
+  UI.forEach(el => el.classList.toggle('on', reading));
+  cubeTargetY = reading ? -1.15 : 0;          // منشور در حالت خواندن پایین می‌رود
+  glowTarget = s === 'watch' ? 0 : (reading ? 0.35 : 1);
+  goldTarget = s === 'done' ? 1 : 0;          // پایان: منشور طلایی
+  if (s === 'watch') statusEl.textContent = 'آیه را روبه‌روی دوربین بگیرید';
+  if (s === 'found') statusEl.textContent = '✨ آیه شناسایی شد — روی منشور بزنید';
+  if (s === 'reading') { statusEl.textContent = ''; startVerse(0); }
+  if (s === 'done') statusEl.textContent = '🌙 سوره‌ی فیل تمام شد — روی منشور بزنید تا دوباره شروع شود';
+}
+
+function startVerse(i) { rv = i; rHits = new Set(); rMax = 0; renderReading(); }
+
+function renderReading() {
+  const words = SURAH[rv], n = words.length;
+  document.getElementById('cardT').textContent = `سوره‌ی فیل — آیه ${rv + 1} از ${SURAH.length}`;
+  document.getElementById('cardW').textContent = 'کلمه‌ی جاری: ' + words[rMax];
+  const wb = document.getElementById('wbox');
+  wb.style.width = (100 / n) + '%';
+  wb.style.left = ((n - 1 - rMax) * 100 / n) + '%';   // متن راست‌به‌چپ است
+}
+
+function nextVerse() {
+  if (rv + 1 >= SURAH.length) return setState('done');
+  startVerse(rv + 1);
+}
+
+function onText(text) {
+  if (!text) return;
+  if (state === 'watch') { if (isMatch(text)) setState('found'); return; }
+  if (state !== 'reading') return;
+  const t = normalize(text).replace(/[^\u0600-\u06FF\s]/g, ' ');
+  const flat = t.replace(/\s+/g, ''), toks = t.split(/\s+/).filter(Boolean);
+  const words = SURAH[rv];
+  words.forEach((w, i) => { if (tokHit(w, toks, flat)) { rHits.add(i); rMax = Math.max(rMax, i); } });
+  renderReading();
+  if (rHits.size / words.length >= 0.6) nextVerse();
+}
+
+function onTap() {
+  if (state === 'found') setState('reading');
+  else if (state === 'done') setState('watch');
+}
+document.getElementById('nextBtn').onclick = nextVerse;
+document.getElementById('endBtn').onclick = () => setState('done');
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (SR) {
@@ -327,7 +417,7 @@ if (SR) {
   document.body.appendChild(vb);
   vb.onclick = () => {
     const r = new SR(); r.lang = 'ar-SA'; r.continuous = true; r.interimResults = true;
-    r.onresult = e => { const t = Array.from(e.results).map(x => x[0].transcript).join(' '); dbg.textContent = t.slice(-160); if (isMatch(t)) triggerGlow(); };
+    r.onresult = e => { const t = Array.from(e.results).map(x => x[0].transcript).join(' '); dbg.textContent = t.slice(-160); onText(t); };
     r.onend = () => { try { r.start(); } catch (_) {} };
     r.start(); vb.textContent = '🎤 در حال گوش دادن...';
   };
@@ -400,7 +490,7 @@ async function scan() {
     binarize(ocrCanvas, 10);
     const { data } = await worker.recognize(ocrCanvas);
     dbg.textContent = (data.text||'').trim().slice(0,160);
-    if (isMatch(data.text)) triggerGlow();
+    onText(data.text);
   } catch (e) {
     // خطای یک فریم را نادیده می‌گیریم
   }
